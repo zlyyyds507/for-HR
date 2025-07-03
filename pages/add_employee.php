@@ -1,4 +1,10 @@
 <?php
+require_once __DIR__ . '/../auth.php';
+require_login();
+require_role('admin');
+?>
+
+<?php
 session_start();
 if (!isset($_SESSION['user'])) {
     header("Location: ../personnel-management/login.php");

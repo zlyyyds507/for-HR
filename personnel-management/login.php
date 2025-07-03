@@ -1,19 +1,26 @@
 <?php
 session_start();
-$users = [
-    'admin' => '123456', // 用户名 => 密码（实际项目建议加密）
-];
+require_once __DIR__ . '/db/connect.php';
+
 $message = "";
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $u = trim($_POST['username']);
     $p = trim($_POST['password']);
-    if (isset($users[$u]) && $users[$u] === $p) {
+    $stmt = $conn->prepare("SELECT password, role FROM users WHERE username=?");
+    $stmt->bind_param("s", $u);
+    $stmt->execute();
+    $stmt->bind_result($db_password, $role);
+    if ($stmt->fetch() && $db_password === $p) { // 实际项目建议用 password_verify
         $_SESSION['user'] = $u;
-        header("Location: ../pages/employee_list.php");
+        // 统一角色为小写且无空格，防止判断出错
+        $_SESSION['role'] = strtolower(trim($role));
+        header("Location: index.php");
         exit;
     } else {
         $message = "用户名或密码错误";
     }
+    $stmt->close();
 }
 ?>
 <!DOCTYPE html>
