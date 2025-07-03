@@ -23,7 +23,6 @@ if (!isset($_SESSION['user'])) {
     <h1>欢迎来到人事管理系统</h1>
     <ul>
         <li><a href="../pages/employee_list.php">员工列表</a></li>
-        <li><a href="../pages/add_employee.php">添加新员工</a></li>
     </ul>
     <a class="logout" href="logout.php">退出登录</a>
 </body>
