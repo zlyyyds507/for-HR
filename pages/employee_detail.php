@@ -26,9 +26,10 @@ $role = $_SESSION['role'] ?? 'user';
 $login_user = $_SESSION['user'] ?? '';
 $is_self = isset($emp['username']) && ($emp['username'] === $login_user);
 
-// 处理辞退或辞职（只有管理员或本人可以）
+// 处理辞退、辞职、归档、删除
 $message = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // 管理员辞退
     if (isset($_POST['fire']) && $role === 'admin' && $emp['status'] === '在职') {
         $stmt = $conn->prepare("UPDATE employees SET status='离职' WHERE id=?");
         $stmt->bind_param("i", $id);
@@ -37,6 +38,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $message = "该员工已被辞退！";
         $emp['status'] = '离职';
     }
+    // 员工自助辞职
     if (isset($_POST['resign']) && $is_self && $emp['status'] === '在职') {
         $stmt = $conn->prepare("UPDATE employees SET status='离职' WHERE id=?");
         $stmt->bind_param("i", $id);
@@ -45,10 +47,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $message = "您已成功辞职！";
         $emp['status'] = '离职';
     }
+    // 管理员归档
+    if (isset($_POST['archive']) && $role === 'admin' && $emp['status'] === '离职') {
+        $stmt = $conn->prepare("UPDATE employees SET status='已归档' WHERE id=?");
+        $stmt->bind_param("i", $id);
+        $stmt->execute();
+        $stmt->close();
+        $message = "员工已归档！";
+        $emp['status'] = '已归档';
+    }
+    // 管理员删除（任何状态都可以删除）
+    if (isset($_POST['delete_emp']) && $role === 'admin') {
+        $conn->query("DELETE FROM employee_attachments WHERE employee_id=$id");
+        if (!empty($emp['username'])) {
+            $username = $emp['username'];
+            $user_stmt = $conn->prepare("DELETE FROM users WHERE username=?");
+            $user_stmt->bind_param("s", $username);
+            $user_stmt->execute();
+            $user_stmt->close();
+        }
+        $stmt = $conn->prepare("DELETE FROM employees WHERE id=?");
+        $stmt->bind_param("i", $id);
+        if ($stmt->execute()) {
+            header("Location: employee_list.php");
+            exit;
+        } else {
+            $message = "删除失败：" . $stmt->error;
+        }
+        $stmt->close();
+    }
 }
 
-// 处理表单提交（管理员或本人可编辑，但字段范围不同）
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['editinfo']) && $emp['status'] === '在职') {
+// 处理资料编辑
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['editinfo']) && $emp['status'] !== '已归档') {
     if ($role === 'admin') {
         $contact = trim($_POST['contact']);
         $id_card = trim($_POST['id_card']);
@@ -64,7 +95,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['editinfo']) && $emp['
     }
     if (isset($stmt) && $stmt->execute()) {
         $message = "资料修改成功！";
-        // 重新查一遍最新数据
         $stmt_row = $conn->prepare("SELECT * FROM employees WHERE id=? LIMIT 1");
         $stmt_row->bind_param("i", $id);
         $stmt_row->execute();
@@ -102,6 +132,7 @@ while($row = $att_res->fetch_assoc()) $attachments[] = $row;
         .form-inline { display:inline; }
         .status-on { color: #26a042; }
         .status-off { color: #c00; }
+        .status-archived { color: #888; }
     </style>
 </head>
 <body>
@@ -114,8 +145,12 @@ while($row = $att_res->fetch_assoc()) $attachments[] = $row;
         <tr><th>姓名</th><td><?= htmlspecialchars($emp['name']) ?></td></tr>
         <tr><th>部门</th><td><?= htmlspecialchars($emp['department']) ?></td></tr>
         <tr><th>职位</th><td><?= htmlspecialchars($emp['position']) ?></td></tr>
-        <tr><th>入职状态</th>
-            <td class="<?= $emp['status']=='在职'?'status-on':'status-off' ?>"><?= htmlspecialchars($emp['status']) ?></td></tr>
+        <tr>
+            <th>入职状态</th>
+            <td class="<?= $emp['status']=='在职'?'status-on':($emp['status']=='离职'?'status-off':'status-archived') ?>">
+                <?= htmlspecialchars($emp['status']) ?>
+            </td>
+        </tr>
         <tr><th>联系方式</th><td><?= htmlspecialchars($emp['contact'] ?? '') ?></td></tr>
         <tr><th>学历</th><td><?= htmlspecialchars($emp['education'] ?? '') ?></td></tr>
         <tr>
@@ -126,15 +161,24 @@ while($row = $att_res->fetch_assoc()) $attachments[] = $row;
                 <?php else: ?>
                     <span style="color:gray;">暂无照片</span>
                 <?php endif; ?>
+                <!-- 本人或管理员可以上传照片，且不是已归档 -->
+                <?php if ($emp['status'] !== '已归档' && ($role === 'admin' || $is_self)): ?>
+                <form class="form-inline" method="post" enctype="multipart/form-data" action="upload_photo.php?id=<?= $id ?>">
+                    <input type="file" name="photo" accept="image/*" required>
+                    <button type="submit">上传/更换照片</button>
+                </form>
+                <?php endif; ?>
             </td>
         </tr>
         <?php if ($role === 'admin'): ?>
             <tr><th>身份证号</th><td><?= htmlspecialchars($emp['id_card'] ?? '') ?></td></tr>
+        <?php endif; ?>
+        <?php if ($role === 'admin' || $is_self): ?>
             <tr><th>合同到期日</th><td><?= htmlspecialchars($emp['contract_end_date'] ?? '') ?></td></tr>
         <?php endif; ?>
     </table>
 
-    <!-- 操作按钮：仅管理员或本人且在职可辞退/辞职 -->
+    <!-- 操作按钮：根据状态和权限显示 -->
     <div style="margin:10px 0;">
         <?php if ($emp['status'] === '在职'): ?>
             <?php if ($role === 'admin'): ?>
@@ -147,11 +191,21 @@ while($row = $att_res->fetch_assoc()) $attachments[] = $row;
                     <button type="submit" name="resign" onclick="return confirm('确定要辞职吗？')">我要辞职</button>
                 </form>
             <?php endif; ?>
+        <?php elseif ($emp['status'] === '离职' && $role === 'admin'): ?>
+            <form method="post" style="display:inline;">
+                <button type="submit" name="archive" onclick="return confirm('确定要归档此离职员工吗？归档后不可恢复。')">归档</button>
+            </form>
+        <?php endif; ?>
+
+        <?php if ($role === 'admin'): ?>
+            <form method="post" style="display:inline;">
+                <button type="submit" name="delete_emp" onclick="return confirm('确定要永久删除该员工吗？此操作不可恢复！')">删除员工</button>
+            </form>
         <?php endif; ?>
     </div>
 
-    <!-- 编辑表单：管理员或本人均可编辑，但字段范围不同 -->
-    <?php if ($emp['status'] === '在职' && ($role === 'admin' || $is_self)): ?>
+    <!-- 编辑表单：管理员或本人均可编辑，字段范围不同，且不是已归档 -->
+    <?php if ($emp['status'] !== '已归档' && ($role === 'admin' || $is_self)): ?>
     <form method="post">
         <table>
             <?php if ($role === 'admin'): ?>
@@ -172,12 +226,12 @@ while($row = $att_res->fetch_assoc()) $attachments[] = $row;
     </form>
     <?php endif; ?>
 
-    <!-- 附件显示，只有管理员可删除和上传，普通员工只能查看 -->
+    <!-- 附件显示：本人或管理员可上传/删除，其他只能看，已归档只读 -->
     <table style="margin-top:18px;">
         <tr>
             <th>附件（简历/证书等）</th>
             <td>
-                <?php if ($role === 'admin' && $emp['status'] === '在职'): ?>
+                <?php if ($emp['status'] !== '已归档' && ($role === 'admin' || $is_self)): ?>
                 <form class="form-inline" method="post" enctype="multipart/form-data" action="upload_attachment.php?id=<?= $id ?>">
                     <input type="file" name="attachment" required>
                     <button type="submit">上传附件</button>
@@ -191,7 +245,7 @@ while($row = $att_res->fetch_assoc()) $attachments[] = $row;
                         <a href="../uploads/<?= htmlspecialchars($att['file_name']) ?>" target="_blank">
                             <?= htmlspecialchars($att['original_name']) ?>
                         </a>
-                        <?php if ($role === 'admin' && $emp['status'] === '在职'): ?>
+                        <?php if ($emp['status'] !== '已归档' && ($role === 'admin' || $is_self)): ?>
                         <a class="att-delete" href="delete_attachment.php?id=<?= $att['id'] ?>&emp_id=<?= $id ?>" onclick="return confirm('删除该附件?')">[删除]</a>
                         <?php endif; ?>
                         <br>
